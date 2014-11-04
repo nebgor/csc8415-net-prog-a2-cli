@@ -17,14 +17,18 @@ static char *tftpstates[]={ "TFTP_STATE_OPENED",
                     "TFTP_STATE_ACK_SENT",
                     "TFTP_STATE_LAST_ACK_SENT",
                     "TFTP_STATE_RRQ_SEND_ACK",
-                    "TFTP_STATE_WRQ_SEND_ACK"
+                    "TFTP_STATE_WRQ_SEND_ACK",
+                    "TFUP_STATE_RTS_SENT"
     }; //start @ i===-1 needs a +1
 
 static char *tftpopcodes[]={ "TFTP_OPCODE_RRQ",
                     "TFTP_OPCODE_WRQ",
                     "TFTP_OPCODE_DATA",
                     "TFTP_OPCODE_ACK",
-                    "TFTP_OPCODE_ERROR"
+                    "TFTP_OPCODE_ERROR",
+                    "TFUP_OPCODE_RTS",
+                    "TFUP_OPCODE_TIME",
+                    "TFUP_OPCODE_RLS"
     }; //start @ i===1 needs a -1
 
 //static sigjmp_buf jmpbuf;
@@ -84,17 +88,32 @@ static void check_sig_handler(tftp_t *tftp) {
 //utility functions: uses shifting on datatypes within protocol packet... 
 // ? define int as length of protocol packet byte fields on machine..?
 
-//static void tftp_dec_port_change( tftp_t *updatetftp, tftp_t *reftftp) {
-//        struct sockaddr_in *sin;
-//        char port[6];
-//        sin = (struct sockaddr_in *) reftftp->addr;
-//        int remote_port = ntohs(sin->sin_port);
-//        snprintf(port, sizeof(port), "%d", remote_port);
-//        //point tftp to request's origin socket and addr.
-//        updatetftp->port = (char*) &port;
-//        int remote_host = (int) inet_ntoa(sin->sin_addr);
-//        updatetftp->host = (char *)remote_host;
-//}
+// General TFUP functions
+
+
+// request for timestamp [just opcode and filename]
+static int tfup_enc_rts_packet(tftp_t *tftp, const int opcode) {
+    unsigned char *p = tftp->msg; //our raw buffer
+    int len;
+
+    *p = (opcode & 0xff); //lower order byte is going in FIRST for the 2014 assignment 2 given model server..
+    p++;   
+    *p = ((opcode >> 8) & 0xff); //big-endian (network byte order also)
+    p++;
+
+    //send tftp->file 
+    len = strlen(tftp->file) + 1 + strlen(tftp->mode) + 1; //len without opcode.
+    if (4 + len > TFTP_MAX_MSGSIZE) {
+        errmsg("encoding error: filename too long");
+        return -1;
+    }
+
+    len = strlen(tftp->file);
+    memcpy(p, tftp->file, len + 1);
+    p += len + 1;
+    return tftp->msglen;
+}
+
 
 
 //General tftp packet creation function
