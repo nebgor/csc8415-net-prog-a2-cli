@@ -15,8 +15,11 @@
 
 void udpnet_open_cli(tftp_t *);
 
+int cmd_tftp(tftp_t tftp, int opcode, char* filename);
+long filestats(char* filename, int echostats);
+
 int main(int argc, char *argv[]) {
-    int fd, opcode = 0;
+    int opcode = 0;
     tftp_t tftp = {
 		.mode = TFTP_MODE_OCTET,
 		.state = TFTP_STATE_OPENED, //this state shouldn't last long in a client (unless its waiting for user cli input!!)
@@ -34,8 +37,8 @@ int main(int argc, char *argv[]) {
     char *token, *filename;
     DIR *dir;
     struct dirent *ent;
-    struct stat st;
     time_t t, current_time, mod_time;
+    long long_time_no_see;
 
 
     // if (strcmp(cmd, "get") == 0) {
@@ -70,22 +73,14 @@ int main(int argc, char *argv[]) {
 			current_time = time(&t); 
 			printf("current time since the EPOCH is %ld ticks\n", (long)t);
         	printf("listing local current directory files....\n\n");
-        	printf("[filename]\tc[Last status change]\ta[Last file access]\tm[Last file modification]\n");
+        	printf("[filename]\t\tm[Last file modification in ticks since EPOCH]\n");
 			if ((dir = opendir (".")) != NULL) {
 			  /* print all the files and directories within directory */
 			  while ((ent = readdir (dir)) != NULL) {
 			  	if (ent->d_type == DT_REG) {
-			  		fd = open(ent->d_name, O_RDONLY);
-					 /* Get info. about the file */
-					fstat(fd, &st);
-					// *length = st.st_size;
-			  		printf ("%s \tc:%s \ta:%s \tm:%s \n", ent->d_name, ctime(&st.st_ctime), ctime(&st.st_atime), ctime(&st.st_mtime));
-
-					/* last modification time */
-					mod_time = st.st_mtime;
-
-					// printf("File last modification time: %ld ticks\n", mod_time);
-					close(fd);
+			  		long_time_no_see = filestats(ent->d_name,0);
+			  		mod_time = (time_t)long_time_no_see;
+			  		printf ("%s \t\tm:%s", ent->d_name, ctime(&mod_time));
 			  	}
 			    	
 			  }
@@ -168,4 +163,19 @@ int cmd_tftp(tftp_t tftp, int opcode, char* filename) {
 			// tftp_close(&tftp);
 			return rc;
 	    }
+}
+
+long filestats(char* filename, int echostats) {
+	struct stat st;
+	int fd = open(filename, O_RDONLY);
+	 /* Get info. about the file */
+	fstat(fd, &st);
+	// *length = st.st_size;
+	if(echostats) {
+		printf ("%s c:%s a:%s m:%s ", filename, ctime(&st.st_ctime), ctime(&st.st_atime), ctime(&st.st_mtime));
+	}
+	// printf("File last modification time: %ld ticks\n", mod_time);
+	close(fd);
+	/* last modification time */
+	return (long)st.st_mtime;
 }
