@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+ #include <dirent.h>
 
 #include "fsm.c"
 //#include "defs.h"
@@ -15,71 +16,156 @@
 void udpnet_open_cli(tftp_t *);
 
 int main(int argc, char *argv[]) {
-    int opcode = 0;
+    int fd, opcode = 0;
+    tftp_t tftp = {
+		.mode = TFTP_MODE_OCTET,
+		.state = TFTP_STATE_OPENED, //this state shouldn't last long in a client (unless its waiting for user cli input!!)
+    };
 
     tftpstr="tftp-cli";
 
-    tftp_t tftp = {
-	.mode = TFTP_MODE_OCTET,
-	.state = TFTP_STATE_OPENED, //this state shouldn't last long in a client (unless its waiting for user cli input!!)
-    };
-
-    if (argc < 5) {
-        fprintf(stderr, "Usage: %s <ip address> <port> get|put <filename> [target]\n", argv[0]);
+    if (argc < 3) {
+        //fprintf(stderr, "Usage: %s <ip address> <port> get|put <filename> [target]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <ip address> <port> \n", argv[0]);
         exit(1);
     }
+
+    char cmdstr[50];
+    char *token, *filename;
+    DIR *dir;
+    struct dirent *ent;
+    struct stat st;
+    time_t t, current_time, mod_time;
+
+
+    // if (strcmp(cmd, "get") == 0) {
+    //     opcode = TFTP_OPCODE_RRQ;
+    // } else if (strcmp(cmd, "put") == 0) {
+	   //  opcode = TFTP_OPCODE_WRQ;
+    // } else if (strcmp(cmd, "rts") == 0) {
+	   //  opcode = TFUP_OPCODE_RTS;
+    // }
+    
     tftp.host = argv[1];
     tftp.port = argv[2];
-    char *cmd=argv[3];
 
-    printf("%d\n", TFUP_OPCODE_RTS);
-    printf("%s\n", cmd);
+    // create a UDP socket //
+    udpnet_open_cli(&tftp);
+    while(1) {
+    	// brand new connection.
+    	tftp.state = TFTP_STATE_OPENED; //this state shouldn't last long in a client (unless its waiting for user cli input!!)
 
-    if (strcmp(cmd, "get") == 0) {
-        opcode = TFTP_OPCODE_RRQ;
-    } else if (strcmp(cmd, "put") == 0) {
-	    opcode = TFTP_OPCODE_WRQ;
-    } else if (strcmp(cmd, "rts") == 0) {
-	    opcode = TFUP_OPCODE_RTS;
-    } else {
-    	printf("dunno.bye.\n");
+    	// User input cli
+    	printf("\nType h for help on commands.\n");
+    	printf("> ");
+    	scanf("%s", cmdstr);
+
+		token = strtok(cmdstr, " ");
+	    if (strcmp(token, "h") == 0) {
+	    	printf("a verbose help message.\n");
+	    	continue;
+
+	    } else if (strcmp(token, "llist") == 0) {
+
+			current_time = time(&t); 
+			printf("current time since the EPOCH is %ld ticks\n", (long)t);
+        	printf("listing local current directory files....\n\n");
+        	printf("[filename]\tc[Last status change]\ta[Last file access]\tm[Last file modification]\n");
+			if ((dir = opendir (".")) != NULL) {
+			  /* print all the files and directories within directory */
+			  while ((ent = readdir (dir)) != NULL) {
+			  	if (ent->d_type == DT_REG) {
+			  		fd = open(ent->d_name, O_RDONLY);
+					 /* Get info. about the file */
+					fstat(fd, &st);
+					// *length = st.st_size;
+			  		printf ("%s \tc:%s \ta:%s \tm:%s \n", ent->d_name, ctime(&st.st_ctime), ctime(&st.st_atime), ctime(&st.st_mtime));
+
+					/* last modification time */
+					mod_time = st.st_mtime;
+
+					// printf("File last modification time: %ld ticks\n", mod_time);
+					close(fd);
+			  	}
+			    	
+			  }
+			  closedir (dir);
+			} else {
+			  /* could not open directory */
+			  perror ("Could not open directory.\n");
+			}
+
+
+        	continue;
+	    } else if (strcmp(token, "rupdate") == 0) {
+	    	filename = strtok(NULL, " ");
+	    	if (filename == NULL) {
+	    		printf("error. missing filename argument.\n");
+	    		continue;
+	    	}
+	    	printf("filename:%s\n", filename);
+	    	printf("ok checking filename %s ...\n", filename);
+	    	//compare timestamps via TFUP RTS...
+		    // cmd_tfup(&tftp, opcode, filename)
+
+	    	// update file.
+	        opcode = TFTP_OPCODE_RRQ;
+		    opcode = TFTP_OPCODE_WRQ;
+
+		    // cmd_tftp(&tftp, opcode, filename)
+		    continue;
+	    } else if (strcmp(cmdstr, "rts") == 0) {
+		    opcode = TFUP_OPCODE_RTS;
+		    continue;
+	    } else if (strcmp(token, "q") == 0) {
+	    	printf("ok, quiting...\n");
+	    	tftp_close(&tftp);
+	    	printf("connection closed. bye.\n");
+	    	exit(0);
+	    } else {
+	    	printf("unknown input, try again. h for help. q to quit.\n");
+	    	continue;
+	    }
     }
-    printf("ok.\n");
+}
 
-    tftp.file = argv[4];
-    if (argc == 6) {
-        tftp.target = argv[5];
-    } else {
-        tftp.target = tftp.file; //smart people, simple life!
-    }
+int cmd_tftp(tftp_t tftp, int opcode, char* filename) {
 
-    if (opcode == TFTP_OPCODE_RRQ || opcode == TFTP_OPCODE_WRQ ||  opcode == TFUP_OPCODE_RTS ||  opcode == TFUP_OPCODE_RLS) {
-		int rc = 0;
-		int flags;
-		int state;
+    	// upon rupdate 'f' do the necessary RRQ or WRQ (based on timestamp comparison)
 
-	        // create a UDP socket //
-	        udpnet_open_cli(&tftp);
+	    if (opcode == TFTP_OPCODE_RRQ || opcode == TFTP_OPCODE_WRQ) {
+			int rc = 0;
+			int flags;
+			int state;
 
-		flags = (opcode == TFTP_OPCODE_RRQ) ? file_write(tftp.target, &tftp.fd) : file_read(tftp.file, &tftp.fd);
-		state = (opcode == TFTP_OPCODE_RRQ) ? TFTP_STATE_RRQ_SENT : TFTP_STATE_WRQ_SENT;
+		        // // create a UDP socket //
+		        // udpnet_open_cli(&tftp);
+		    // tftp.file = argv[4];
+		    // if (argc == 6) {
+		    //     tftp.target = argv[5];
+		    // } else {
+		    //     tftp.target = tftp.file; //smart people, simple life!
+		    // }
 
-		if (tftp.fd == -1) {
-		    fprintf(stderr, "%s: failed to open '%s': %s\n",tftpstr, tftp.file, strerror(errno));
-		    tftp_close(&tftp);
-		    return -1;
-		}
+			flags = (opcode == TFTP_OPCODE_RRQ) ? file_write(tftp.target, &tftp.fd) : file_read(tftp.file, &tftp.fd);
+			state = (opcode == TFTP_OPCODE_RRQ) ? TFTP_STATE_RRQ_SENT : TFTP_STATE_WRQ_SENT;
 
-		if (tftp_enc_packet(&tftp, opcode, 0, NULL, 0) == -1) {
-		    fprintf(stderr, "%s: encoding error\n", tftpstr);
-		    tftp_close(&tftp);
-		    return -1;
-		}
-		tftp.state = state;
-		tftp.blkno = (opcode == TFTP_OPCODE_RRQ) ? 1 : 0; //sent,expecting this blkno back
+			if (tftp.fd == -1) {
+			    fprintf(stderr, "%s: failed to open '%s': %s\n",tftpstr, tftp.file, strerror(errno));
+			    // tftp_close(&tftp);
+			    return -1;
+			}
 
-		rc = tftp_mainloop(&tftp); //main part of FSM
-		tftp_close(&tftp);
-		return rc;
-    }
+			if (tftp_enc_packet(&tftp, opcode, 0, NULL, 0) == -1) {
+			    fprintf(stderr, "%s: encoding error\n", tftpstr);
+			    // tftp_close(&tftp);
+			    return -1;
+			}
+			tftp.state = state;
+			tftp.blkno = (opcode == TFTP_OPCODE_RRQ) ? 1 : 0; //sent,expecting this blkno back
+
+			rc = tftp_mainloop(&tftp); //main part of FSM
+			// tftp_close(&tftp);
+			return rc;
+	    }
 }
