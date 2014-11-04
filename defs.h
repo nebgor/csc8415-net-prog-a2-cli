@@ -23,6 +23,8 @@
 
 // request timestamp
 #define TFUP_OPCODE_RTS   6
+// request timestamp response
+#define TFUP_OPCODE_TIME   7
 // 'rlist' - requests a list of file in the remote. client may implement an 'llist' locally.
 #define TFUP_OPCODE_RLS   8
 
@@ -60,6 +62,8 @@
 #define TFTP_STATE_RRQ_SEND_ACK	  7
 #define TFTP_STATE_WRQ_SEND_ACK	  8
 
+#define TFUP_STATE_RTS_SENT 9
+
 //the most useful struct
 typedef struct tftp {
     char *host; //literal address
@@ -77,4 +81,5 @@ typedef struct tftp {
     int addrlen;
     unsigned char msg[TFTP_MAX_MSGSIZE]; //tftp msg send buffer
     int        msglen;		//tftp msg send buffer len
+    long    timestamp;
 } tftp_t;
