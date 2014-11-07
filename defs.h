@@ -29,8 +29,8 @@
 #define TFUP_OPCODE_RLS   8
 
 #define TFTP_DEF_RETRIES	3
-#define TFTP_DEF_TIMEOUT_SEC	0
-#define TFTP_DEF_TIMEOUT_USEC	10000
+#define TFTP_DEF_TIMEOUT_SEC	1
+#define TFTP_DEF_TIMEOUT_USEC	5000
 #define TFTP_BLOCKSIZE		512
 //
 #define TFTP_MAX_MSGSIZE	(4 + TFTP_BLOCKSIZE)
@@ -81,5 +81,6 @@ typedef struct tftp {
     int addrlen;
     unsigned char msg[TFTP_MAX_MSGSIZE]; //tftp msg send buffer
     int        msglen;		//tftp msg send buffer len
-    long    timestamp;
+    time_t    timestamp;
+    int opcode;
 } tftp_t;

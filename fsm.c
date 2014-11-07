@@ -93,28 +93,56 @@ static void check_sig_handler(tftp_t *tftp) {
 
 // request for timestamp [just opcode and filename]
 static int tfup_enc_rts_packet(tftp_t *tftp, const int opcode) {
+    printf("encoding RTS, opcode:%d\n", opcode);
+
     unsigned char *p = tftp->msg; //our raw buffer
     int len;
-
+    // showbits(*p);
     *p = (opcode & 0xff); //lower order byte is going in FIRST for the 2014 assignment 2 given model server..
-    p++;   
+        // showbits(*p);
+    p++;  
     *p = ((opcode >> 8) & 0xff); //big-endian (network byte order also)
+        // showbits(*p);
     p++;
-
-    //send tftp->file 
-    len = strlen(tftp->file) + 1 + strlen(tftp->mode) + 1; //len without opcode.
-    if (4 + len > TFTP_MAX_MSGSIZE) {
+    // showbits(tftp->msg);
+    //send tftp->file
+    len = strlen(tftp->file) + 2 ; //len
+    if (len > TFTP_MAX_MSGSIZE) {
         errmsg("encoding error: filename too long");
         return -1;
     }
 
-    len = strlen(tftp->file);
+    //len = strlen(tftp->file);
     memcpy(p, tftp->file, len + 1);
     p += len + 1;
+
+    tftp->msglen=len;
+    tftp->opcode=opcode; //for detecting if tfup operation
     return tftp->msglen;
 }
 
+static int tfup_dec_opcode(unsigned char *buf, int buflen, int *opcode) {
+    if (buflen < 2) {
+    return 0xffff;
+    }
 
+    *opcode = (buf[1] << 8) + buf[0];
+    fprintf(stdout,"decoded tfup opcode %d\n",  *opcode);
+    return 0;
+}
+
+static int tfup_dec_timestamp(unsigned char *buf, int buflen, tftp_t *tftp) {
+    long ts;
+    // bcopy(buf[2],ts,4);
+    memcpy(&ts, buf+2, buflen-2);
+
+    tftp->timestamp = ntohl(ts);
+
+    // tftp->timestamp = ntohl(tftp->timestamp);
+    // *timestamp = (buf[0] << 8) + buf[0];
+    fprintf(stdout,"decoded tfup timestamp %ld\n",  tftp->timestamp);
+    return 0;
+}
 
 //General tftp packet creation function
 static int tftp_enc_packet(tftp_t *tftp, const int opcode, int blkno, unsigned char *data, int datalen) {
@@ -125,7 +153,6 @@ static int tftp_enc_packet(tftp_t *tftp, const int opcode, int blkno, unsigned c
     p++;   
     *p = ((opcode >> 8) & 0xff); //big-endian (network byte order also)
     p++;
-
 
     switch (opcode) {
 
@@ -193,7 +220,7 @@ static int tftp_dec_opcode(unsigned char *buf, int buflen, int *opcode) {
     }
 
     *opcode = (buf[0] << 8) + buf[1];
-    fprintf(stdout,"decoded opcode %d\n",  *opcode);
+    fprintf(stdout,"decoded tftp opcode %d\n",  *opcode);
     return 0;
 }
 
@@ -296,15 +323,14 @@ static int tftp_mainloop(tftp_t *tftp)
     while (tftp->state != TFTP_STATE_CLOSED) {
         fprintf(stdout, "%s (pid:%d): current tftp protocol state=%s\n", tftpstr, getpid(), tftpstates[(tftp->state)+1]);
 
-
         check_sig_handler(tftp);
 
-	if (gettimeofday(&now, NULL) == -1) {
-	    fprintf(stderr, "%s: gettimeofday: %s\n",
-		    tftpstr, strerror(errno));
-	    tftp_close(tftp);
-	    return -1;
-	}
+    	if (gettimeofday(&now, NULL) == -1) {
+    	    fprintf(stderr, "%s: gettimeofday: %s\n",
+    		    tftpstr, strerror(errno));
+    	    // tftp_close(tftp);
+    	    return -1;
+    	}
 
         //immediately send prepared packet in for non opened states
         if (tftp->state != TFTP_STATE_OPENED) { //the server is quite passive!
@@ -313,9 +339,10 @@ static int tftp_mainloop(tftp_t *tftp)
                 // (gdb) p (struct sockaddr_in ) *tftp->addr
                 tftp->addrlen = sizeof(*tftp->addr);
                 // eg: first msg = "\000\001files.o\000octet"
+
                 if (-1 == sendto(tftp->sd, tftp->msg, tftp->msglen, 0,(const struct sockaddr *) tftp->addr, tftp->addrlen)) {
                     fprintf(stderr, "%s: sendto: %s\n", tftpstr, strerror(errno));
-                    tftp_close(tftp);
+                    // tftp_close(tftp);
                     return -1;
                 } else {
                     struct sockaddr_in sin;
@@ -361,7 +388,7 @@ static int tftp_mainloop(tftp_t *tftp)
             if (select((tftp->sd)+1, &fdset, NULL, NULL, &timeout) == -1) {
                 fprintf(stderr, "%s: select: %s\n",
                         tftpstr, strerror(errno));
-                tftp_close(tftp);
+                // tftp_close(tftp);
                 return -1;
             }
 
@@ -371,7 +398,7 @@ static int tftp_mainloop(tftp_t *tftp)
                     fprintf(stderr,
                             "%s: timeout, aborting data transfer\n",
                             tftpstr);
-                    tftp_close(tftp);
+                    // tftp_close(tftp);
                     return -1;
                 }
                 continue;
@@ -380,19 +407,26 @@ static int tftp_mainloop(tftp_t *tftp)
             buflen = recvfrom(tftp->sd, buf, sizeof(buf), 0, (struct sockaddr *) tftp->addr, &tftp->addrlen);
             if (buflen == -1) {
                 fprintf(stderr, "%s: recvfrom: %s\n", tftpstr, strerror(errno));
-                tftp_close(tftp);
+                // tftp_close(tftp);
                 return -1;
             }
 //            fprintf(stdout, "%s: recvfrom: %s\n", tftpstr, tftp->addr);
-            if (tftp_dec_opcode(buf, buflen, &opcode) != 0) {
-                errmsg("failed to parse opcode in message");
-                continue;
+            if(tftp->opcode > 5) {
+                if (tfup_dec_opcode(buf, buflen, &opcode) != 0) {
+                    errmsg("failed to parse tfup opcode in message");
+                    continue;
+                }
+            } else {
+                if (tftp_dec_opcode(buf, buflen, &opcode) != 0) {
+                    errmsg("failed to parse tftp opcode in message");
+                    continue;
+                }
             }
         } else {
                 fprintf(stdout, "%s (pid:%d): current tftp protocol msg=%s\n", tftpstr, getpid(), (tftp->msg));
             if (tftp->msglen == -1) {
                 fprintf(stderr, "%s: recvfrom (via server primary port): %s\n", tftpstr, strerror(errno));
-                tftp_close(tftp);
+                // tftp_close(tftp);
                 return -1;
             }
             // eg: msg = "\000\001files.o\000octet"
@@ -421,6 +455,11 @@ static int tftp_mainloop(tftp_t *tftp)
         fprintf(stdout, "%s (pid:%d): got opcode=%s\n", tftpstr, getpid(), tftpopcodes[opcode-1]);
 
         switch (tftp->state) { //control our opcode based on state.
+            case TFUP_STATE_RTS_SENT:
+                opcode = TFUP_OPCODE_TIME;
+                fprintf(stdout, "%s (pid:%d): ending opcode=%s\n", tftpstr, getpid(), tftpopcodes[opcode-1]);
+                break;
+
             case TFTP_STATE_RRQ_SENT: //a client will write and ACK
             case TFTP_STATE_WRQ_SEND_ACK: //a server will write and ACK
             case TFTP_STATE_ACK_SENT: //con't to keep sending ACK
@@ -438,6 +477,10 @@ static int tftp_mainloop(tftp_t *tftp)
                 opcode = TFTP_OPCODE_ERROR; break; //unknown state.. very bad.
         }
         switch (opcode) {
+            case TFUP_OPCODE_TIME:
+                tfup_dec_timestamp(buf, buflen, tftp);
+                return 0;
+                break;
             case TFTP_OPCODE_ACK: //the client or server will do this
                 errmsg("starting ACK out\n");
                 if (tftp->state != TFTP_STATE_WRQ_SEND_ACK ) { //i'm a client.
@@ -474,13 +517,13 @@ static int tftp_mainloop(tftp_t *tftp)
                         if (len == -1) {
                             fprintf(stderr, "%s: write: %s\n",
                                     tftpstr, strerror(errno));
-                            tftp_close(tftp);
+                            // tftp_close(tftp);
                             return -1;
                         }
                     } else {
                         if (tftp_dec_filename_mode(buf, tftp) != 0) {
                             errmsg("failed to decode filename in RRQ packet or unsupported tftp mode");
-                            tftp_close(tftp);
+                            // tftp_close(tftp);
                             continue;
                         }
                         tftp->target=tftp->file;
@@ -538,7 +581,7 @@ static int tftp_mainloop(tftp_t *tftp)
                     len = read(tftp->fd, buf, TFTP_BLOCKSIZE);
                     if (len == -1) {
                         fprintf(stderr, "%s: read: %s\n", tftpstr, strerror(errno));
-                        tftp_close(tftp);
+                        // tftp_close(tftp);
                         return -1;
                     }
                     if (tftp_enc_packet(tftp, TFTP_OPCODE_DATA, ++tftp->blkno, buf, len) == -1) {
