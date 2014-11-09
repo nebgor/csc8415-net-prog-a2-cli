@@ -41,6 +41,52 @@ static void showbits(unsigned int x)
     printf("\n");
 }
 
+
+static void jacobson_rto(struct timeval *mrtt, struct timeval *srtt, struct timeval *drtt, struct timeval *vrtt, struct timeval *rto) {
+// struct timeval timeout, transmissiontime, mrtt, srtt, drtt; //rto=timeout
+/***
+jacobson's algo for Round Trip Timeout (RTO):
+    simplistic variance.
+    delta = measuredRTT - smoothedRTT;
+    smoothedRTT = smoothedRTT + factor * delta;
+    varianceRTT = variance RTT + h( abs(delta) - varianceRTT );
+    RTO = smoothedRTT + 4 * varianceRTT;
+
+*******/
+    struct timeval tmptime={0};
+
+printf("srtt: %d:%d\t", srtt->tv_sec, srtt->tv_usec);
+printf("drtt: %d:%d\n", drtt->tv_sec, drtt->tv_usec);
+    timersub(mrtt, srtt, drtt);
+    drtt->tv_sec *= 1.8; //factor
+    drtt->tv_usec *= 1.8;//factor
+printf("drtt: %d:%d\t", srtt->tv_sec, srtt->tv_usec);
+    timeradd(srtt, drtt, srtt);
+printf("srtt: %d:%d\n", drtt->tv_sec, drtt->tv_usec);
+
+    drtt->tv_sec = abs(drtt->tv_sec);
+    drtt->tv_usec = abs(drtt->tv_usec);
+
+    timersub(drtt, vrtt, drtt); //this should be wrapped in some h() function. for now; unitary. hm, exponent?
+    timeradd(drtt, vrtt, vrtt);
+
+printf("drtt: %d:%d\t", drtt->tv_sec, drtt->tv_usec);
+printf("vrtt: %d:%d\n", vrtt->tv_sec, vrtt->tv_usec);
+
+    timeradd(vrtt, &tmptime, &tmptime);
+    timeradd(vrtt, &tmptime, &tmptime);
+    timeradd(vrtt, &tmptime, &tmptime);
+    timeradd(vrtt, &tmptime, &tmptime);
+
+printf("srtt: %d:%d\t", srtt->tv_sec, srtt->tv_usec);
+printf("tmptime: %d:%d\n", tmptime.tv_sec, tmptime.tv_usec);
+
+    timeradd(&tmptime, srtt, rto);
+
+    printf("rto: %d:%d\n", rto->tv_sec, rto->tv_usec);
+
+}
+
 static void errmsg(char *msg) {
     fprintf(stderr, "%s: %s\n", tftpstr, msg);
 }
@@ -98,10 +144,11 @@ static int tfup_enc_rts_packet(tftp_t *tftp, const int opcode) {
     unsigned char *p = tftp->msg; //our raw buffer
     int len;
     // showbits(*p);
+    // *p = opcode; //basically replicating this below in bitwise operationss.
     *p = (opcode & 0xff); //lower order byte is going in FIRST for the 2014 assignment 2 given model server..
-        // showbits(*p);
+        showbits(*p);
     p++;  
-    *p = ((opcode >> 8) & 0xff); //big-endian (network byte order also)
+    *p = ((opcode >> 8) & 0xff); // so NOT big-endian (network byte order also) but its what the model server expects. 'standards'
         // showbits(*p);
     p++;
     // showbits(tftp->msg);
@@ -151,7 +198,7 @@ static int tftp_enc_packet(tftp_t *tftp, const int opcode, int blkno, unsigned c
 
     *p = (opcode & 0xff); //lower order byte is going in FIRST for the 2014 assignment 2 given model server..
     p++;   
-    *p = ((opcode >> 8) & 0xff); //big-endian (network byte order also)
+    *p = ((opcode >> 8) & 0xff); // so NOT big-endian (network byte order also) but its what the model server expects. 'standards'
     p++;
 
     switch (opcode) {
@@ -177,31 +224,35 @@ static int tftp_enc_packet(tftp_t *tftp, const int opcode, int blkno, unsigned c
     	break;
 
         case TFTP_OPCODE_DATA:
-    	*p = ((blkno >> 8) & 0xff); p++;
-    	*p = (blkno & 0xff); p++;
+    	// *p = ((blkno >> 8) & 0xff); p++;
+    	// *p = (blkno & 0xff); p++;
 
-    	if ((4 + datalen) > TFTP_MAX_MSGSIZE) {
+    	if ((2 + datalen) > TFTP_MAX_MSGSIZE) {
     	    errmsg("encoding error: data too big");
     	    return -1;
-    	}
+    	} else {
+            printf("loaded %d bytes onto data packet.\n", datalen);
+        }
     	memcpy(p, data, datalen);
     	p += datalen;
     	break;
 
         case TFTP_OPCODE_ACK:
-    	*p = ((blkno >> 8) & 0xff); p++;
-    	*p = (blkno & 0xff); p++;
+        // no blkno in tfup. .. we really want a good ack or timeout instead!
+    	// *p = ((blkno >> 8) & 0xff); p++;
+    	// *p = (blkno & 0xff); p++;
     	break;
 
         case TFTP_OPCODE_ERROR:
         default:
     	/* blkno contains an error code and data is a NUL-terminated
     	   string with an error message */
-    	*p = ((blkno >> 8) & 0xff); p++;
-    	*p = (blkno & 0xff); p++;
+        //no blkno in tfup
+    	// *p = ((blkno >> 8) & 0xff); p++;
+    	// *p = (blkno & 0xff); p++;
 
     	len = strlen((char *) data);
-    	if ((4 + len + 1) > TFTP_MAX_MSGSIZE) {
+    	if ((2 + len + 1) > TFTP_MAX_MSGSIZE) {
     	    errmsg("encoding error: error message too big");
     	    return -1;
     	}
@@ -219,7 +270,8 @@ static int tftp_dec_opcode(unsigned char *buf, int buflen, int *opcode) {
 	return 0xffff;
     }
 
-    *opcode = (buf[0] << 8) + buf[1];
+    // so NOT big-endian (network byte order also) but its what the model server expects. 'standards'
+    *opcode = (buf[1] << 8) + buf[0]; //opcode is not like in standard tftp protocol now. opcode it little endian.
     fprintf(stdout,"decoded tftp opcode %d\n",  *opcode);
     return 0;
 }
@@ -267,8 +319,8 @@ static int tftp_dec_data(unsigned char *buf, int buflen, unsigned char **data, i
 	return 0xffff;
     }
 
-    *data = buf+4;
-    *datalen = buflen - 4;
+    *data = buf+2; // no blkno this time in tfup...
+    *datalen = buflen - 2; //no blkno, just opcode to offset.
     fprintf(stdout,"decoded datalen %d\n",  *datalen);
     return 0;
 }
@@ -316,7 +368,7 @@ static int tftp_mainloop(tftp_t *tftp)
     char *servererrmsg;
     fd_set fdset;
     int retries, returnstatus = 1;
-    struct timeval timeout, now;
+    struct timeval rto={0}, timeout={0}, transmissiontime={0}, originaltrans={0}, mrtt={0}, srtt={0}, drtt={0}, vrtt={0}, tmprtt={0}; //rto=timeout
 
     retries = TFTP_DEF_RETRIES;
     timerclear(&tftp->timer);
@@ -325,7 +377,7 @@ static int tftp_mainloop(tftp_t *tftp)
 
         check_sig_handler(tftp);
 
-    	if (gettimeofday(&now, NULL) == -1) {
+    	if (gettimeofday(&transmissiontime, NULL) == -1) {
     	    fprintf(stderr, "%s: gettimeofday: %s\n",
     		    tftpstr, strerror(errno));
     	    // tftp_close(tftp);
@@ -334,7 +386,7 @@ static int tftp_mainloop(tftp_t *tftp)
 
         //immediately send prepared packet in for non opened states
         if (tftp->state != TFTP_STATE_OPENED) { //the server is quite passive!
-            if (! timerisset(&tftp->timer) || timercmp(&now, &tftp->timer, > )) {
+            if (timercmp(&transmissiontime, &tftp->timer, > )) { // allow retransmission ie: when timerisset(&tftp->timer)
 
                 // (gdb) p (struct sockaddr_in ) *tftp->addr
                 tftp->addrlen = sizeof(*tftp->addr);
@@ -351,10 +403,10 @@ static int tftp_mainloop(tftp_t *tftp)
                        sin.sin_family == AF_INET &&
                        addrlen == sizeof(sin)) {
                         int local_port = ntohs(sin.sin_port);
-                        fprintf(stdout, "msg sent from %s:%d\n", //, to %s:%s",
-                                inet_ntoa(sin.sin_addr),
-                                local_port
-                                );
+                        // fprintf(stdout, "msg sent from %s:%d\n", //, to %s:%s",
+                        //         inet_ntoa(sin.sin_addr),
+                        //         local_port
+                        //         );
                     }
                 }
             }
@@ -368,21 +420,41 @@ static int tftp_mainloop(tftp_t *tftp)
             FD_ZERO(&fdset);
             FD_SET(tftp->sd, &fdset);
 
-            if (! timerisset(&tftp->timer)) {
+            // @todo use jacobson's algos to get srtt (and rtt). for now , simplistic doubling. also use karn's : ignore retransmission acks.
+            if (! timerisset(&tftp->timer)) { //first timer setup. 
                 tftp->backoff.tv_sec = TFTP_DEF_TIMEOUT_SEC;
                 tftp->backoff.tv_usec = TFTP_DEF_TIMEOUT_USEC;
-                timeout = tftp->backoff;
-                timeradd(&now, &tftp->backoff, &tftp->timer);
-            } else if (timercmp(&now, &tftp->timer, > )) {
-                /* We just retransmitted. Double the interval. */
-                timeradd(&tftp->backoff, &tftp->backoff, &tftp->backoff);
-                timeout = tftp->backoff;
-                timeradd(&now, &tftp->backoff, &tftp->timer);
+                timeradd(&rto, &tftp->backoff, &timeout);                
+                rto.tv_sec=TFTP_DEF_TIMEOUT_SEC;
+                rto.tv_usec=TFTP_DEF_TIMEOUT_USEC;
+
+                timeradd(&transmissiontime, &timeout, &tftp->timer);
+
+                //save first packet transmission try time.
+                originaltrans.tv_sec = transmissiontime.tv_sec;
+                originaltrans.tv_usec = transmissiontime.tv_usec;
+
+
+                printf("initial timer is setup. backoff: %d:%d\n", timeout.tv_sec, timeout.tv_usec);
+            } else if (timercmp(&transmissiontime, &tftp->timer, > )) {
+                /* We just retransmitted. Double the backoff interval. */
+                timeradd(&tftp->backoff, &tftp->backoff, &tftp->backoff); //dbl backoff
+                timeradd(&rto, &tftp->backoff, &timeout); //add backoff and RTO.
+                // timeradd(&tftp->backoff, &timeout, &timeout);
+                // timeradd(&transmissiontime, &tmprtt, &tftp->timer); //absolute time for select()
+                printf("retransmitting, timeradded with double backoff : %d:%d\n", timeout.tv_sec, timeout.tv_usec);
             } else {
-                /* We did not wait long enough yet. Calculate the
-                   remaining time to block. */
-                timersub(&tftp->timer, &now, &timeout);
+                /* We did not wait long enough as select came back to us with timeout on fd action... 
+                Calculate the remaining time to block. */
+
+                printf("timeout from after select   (timeout) timeout+backoff used : %d:%d\n", timeout.tv_sec, timeout.tv_usec);
+                printf("timeout from after select   (timeout) backoff used : %d:%d\n", tftp->backoff.tv_sec, tftp->backoff.tv_usec);
+                printf("timeout from after select   (timeout) RTO used : %d:%d\n", rto.tv_sec, rto.tv_usec);
+                timersub(&tftp->timer, &transmissiontime, &tmprtt); //timeout is/maybe adjusted by select when it returns upon success.
+                printf("time since (re)transmission: %d:%d\n", tmprtt.tv_sec, tmprtt.tv_usec);
             }
+
+
 
             //the wait control.
             if (select((tftp->sd)+1, &fdset, NULL, NULL, &timeout) == -1) {
@@ -392,7 +464,10 @@ static int tftp_mainloop(tftp_t *tftp)
                 return -1;
             }
 
+
+            // did we timeout or did we receive data from the FD?
             if (! FD_ISSET(tftp->sd, &fdset)) {
+                // punishment for timing out..
                 retries--;
                 if (! retries) {
                     fprintf(stderr,
@@ -401,8 +476,35 @@ static int tftp_mainloop(tftp_t *tftp)
                     // tftp_close(tftp);
                     return -1;
                 }
+                // try again!! (retransmit)
                 continue;
+            } else {
+                //success, reset backoff
+                tftp->backoff.tv_sec = TFTP_DEF_TIMEOUT_SEC;
+                tftp->backoff.tv_usec = TFTP_DEF_TIMEOUT_USEC;
+
+                //measure rtt...
+                printf("timeout from after select  (successful) timeout+backoff used : %d:%d\n", timeout.tv_sec, timeout.tv_usec);
+                printf("timeout from after select  (successful) backoff used : %d:%d\n", tftp->backoff.tv_sec, tftp->backoff.tv_usec);
+                printf("timeout from after select  (successful) RTO used : %d:%d\n", rto.tv_sec, rto.tv_usec);
+                timersub(&tftp->timer, &originaltrans, &mrtt); //timeout is/maybe adjusted by select when it returns upon success.
+                printf("time original transmission : %d:%d\n", originaltrans.tv_sec, originaltrans.tv_usec);
+                printf("time this transmission     : %d:%d\n", transmissiontime.tv_sec, transmissiontime.tv_usec);
+                printf("time since original transmission (mrtt) : %d:%d\n", mrtt.tv_sec, mrtt.tv_usec);
+
+
+
+                if ( !timercmp(&originaltrans, &transmissiontime, < ) ) { //karn - ie: was a backoff used -> retransmission? then we don't know so don't calculate.
+                    // Jacobson's internet saving algorithm
+                    jacobson_rto(&mrtt, &srtt, &drtt, &vrtt, &rto);
+                }
+                printf("RTO: %d:%d\n", rto.tv_sec, rto.tv_usec);
+
             }
+
+
+
+
             tftp->addrlen = sizeof((struct sockaddr *) tftp->addr);
             buflen = recvfrom(tftp->sd, buf, sizeof(buf), 0, (struct sockaddr *) tftp->addr, &tftp->addrlen);
             if (buflen == -1) {
@@ -423,9 +525,9 @@ static int tftp_mainloop(tftp_t *tftp)
                 }
             }
         } else {
-                fprintf(stdout, "%s (pid:%d): current tftp protocol msg=%s\n", tftpstr, getpid(), (tftp->msg));
+                // fprintf(stdout, "%s (pid:%d): current tftp protocol msg=%s\n", tftpstr, getpid(), (tftp->msg));
             if (tftp->msglen == -1) {
-                fprintf(stderr, "%s: recvfrom (via server primary port): %s\n", tftpstr, strerror(errno));
+                // fprintf(stderr, "%s: recvfrom (via server primary port): %s\n", tftpstr, strerror(errno));
                 // tftp_close(tftp);
                 return -1;
             }
@@ -439,9 +541,9 @@ static int tftp_mainloop(tftp_t *tftp)
         }
 
         if (tftp->state == TFTP_STATE_OPENED) { //only server comes here with state===opened.
-            if(opcode == TFTP_OPCODE_RRQ) { //we need to send a data block blkno 1 as ack.
+            if(opcode == TFTP_OPCODE_RRQ) { //we need to send a data block blkno 1 as ack. (not in tfup)
                     tftp->state = TFTP_STATE_RRQ_SEND_ACK;
-            } else if(opcode == TFTP_OPCODE_WRQ){ //@todo: we need to send a blkno 0 as ack
+            } else if(opcode == TFTP_OPCODE_WRQ){ //@todo: we need to send a blkno 0 as ack (not in tfup)
                     tftp->state = TFTP_STATE_WRQ_SEND_ACK;
             } else {
                     //ubnknown/unhandled state transition - @TODO
@@ -451,8 +553,8 @@ static int tftp_mainloop(tftp_t *tftp)
 
         }
 
-        fprintf(stdout, "%s (pid:%d): current on tftp protocol state=%s\n", tftpstr, getpid(), tftpstates[(tftp->state)+1]);
-        fprintf(stdout, "%s (pid:%d): got opcode=%s\n", tftpstr, getpid(), tftpopcodes[opcode-1]);
+        // fprintf(stdout, "%s (pid:%d): current on tftp protocol state=%s\n", tftpstr, getpid(), tftpstates[(tftp->state)+1]);
+        // fprintf(stdout, "%s (pid:%d): got opcode=%s\n", tftpstr, getpid(), tftpopcodes[opcode-1]);
 
         switch (tftp->state) { //control our opcode based on state.
             case TFUP_STATE_RTS_SENT:
@@ -463,7 +565,8 @@ static int tftp_mainloop(tftp_t *tftp)
             case TFTP_STATE_RRQ_SENT: //a client will write and ACK
             case TFTP_STATE_WRQ_SEND_ACK: //a server will write and ACK
             case TFTP_STATE_ACK_SENT: //con't to keep sending ACK
-                opcode = TFTP_OPCODE_ACK; 
+                opcode = TFTP_OPCODE_ACK;
+                tftp->opcode=opcode;
                 fprintf(stdout, "%s (pid:%d): performing opcode=%s\n", tftpstr, getpid(), tftpopcodes[opcode-1]);
                 break; //expect to send ACK
             case TFTP_STATE_WRQ_SENT: //a client will read and send DATA
@@ -478,16 +581,17 @@ static int tftp_mainloop(tftp_t *tftp)
         }
         switch (opcode) {
             case TFUP_OPCODE_TIME:
-                tfup_dec_timestamp(buf, buflen, tftp);
-                return 0;
+                return tfup_dec_timestamp(buf, buflen, tftp);
                 break;
             case TFTP_OPCODE_ACK: //the client or server will do this
                 errmsg("starting ACK out\n");
                 if (tftp->state != TFTP_STATE_WRQ_SEND_ACK ) { //i'm a client.
-                    if (tftp_dec_blkno(buf, buflen, &blkno) != 0) {
-                        errmsg("failed to decode block number in data packet");
-                        continue;
-                    }
+                    //no blk number in tfup server this time.....
+                    // if (tftp_dec_blkno(buf, buflen, &blkno) != 0) {
+                    //     errmsg("failed to decode block number in data packet");
+                    //     continue;
+                    // }
+                    blkno= (blkno<1)?blkno=1:blkno+1; //not used at all in assignment 2 (tfup) thsis just for local logic. payload has no blkno so assume theres always a good blkno.
                     //switch to new communicate with the server's spawned process's remote port
                     if(blkno<=1) { //hmm..security issue?-> update this port everytime after recvfrom() in this function?
                         //(gdb) p ntohs(((struct sockaddr_in *) &tftp.addr).sin_port)
@@ -496,14 +600,14 @@ static int tftp_mainloop(tftp_t *tftp)
                         sin = (struct sockaddr_in *) tftp->addr;
                         int remote_port = ntohs(sin->sin_port);
                         snprintf(port, sizeof(port), "%d", remote_port);
-                        //point tftp to server's new origin socket (not new addr tho).
+                        // printf("point tftp to server's new origin socket.\n");
                         tftp->port = (char*) &port;
                     }
                 } else { //doing ACK (not RRQ/ normal ACK) ; ie: WRQ ack...
                     tftp->blkno=0;
                     blkno=0;
                 }
-                if (blkno == tftp->blkno) {
+                // if (blkno == tftp->blkno) { // no more blkno, must use timer to reply or ignore. so ignore the ones after 1st reply ...
                     unsigned char *data;
                     int len, datalen;
 
@@ -531,14 +635,14 @@ static int tftp_mainloop(tftp_t *tftp)
                         fprintf(stderr, "%s: write : %s\n",tftpstr, strerror(errno));
                     }
 
-                    if (tftp_enc_packet(tftp, TFTP_OPCODE_ACK, tftp->blkno, NULL, 0) == -1) {
+                    if (tftp_enc_packet(tftp, TFTP_OPCODE_ACK, tftp->blkno, NULL, 0) == -1) { //can use blkno as tranmission count also.
                         fprintf(stderr, "%s: encoding error\n", tftpstr);
                         return -1;
                     } else {
-                        errmsg("i'm writing the file. ack packet prepped: opcode_ack");
+                        // errmsg("i'm writing the file. ack packet prepped: opcode_ack");
                     }
                     tftp->blkno++;
-                    timerclear(&tftp->timer);
+                    // timerclear(&tftp->timer); //preserve timer across operation
                     retries = TFTP_DEF_RETRIES;
                     if (blkno > 0) {
                         tftp->state = (datalen == TFTP_BLOCKSIZE ) ?
@@ -547,20 +651,22 @@ static int tftp_mainloop(tftp_t *tftp)
                         tftp->state = TFTP_STATE_ACK_SENT;
                     }
 
-                }
+                // }
 
                 break;
             case TFTP_OPCODE_DATA:
                 errmsg("starting DATA out\n");
                 if (tftp->state != TFTP_STATE_RRQ_SEND_ACK ) {
-                    if (tftp_dec_blkno(buf, buflen, &blkno) != 0) {
-                        errmsg("failed to decode block numer in ack packet");
-                        continue;
-                    }
-                    if (blkno != tftp->blkno) {
-                        errmsg("ignoring unexpected block numer in ack packet"); //RRQ
-                        continue;
-                    }
+                    //no blk number in tfup server this time.....
+                    // if (tftp_dec_blkno(buf, buflen, &blkno) != 0) {
+                    //     errmsg("failed to decode block number in ack packet");
+                    //     continue;
+                    // }
+                    blkno= (blkno<1)?blkno=1:blkno+1;
+                    // if (blkno != tftp->blkno) {
+                    //     errmsg("ignoring unexpected block numer in ack packet"); //RRQ
+                    //     continue;
+                    // }
                 } else {
                     tftp->blkno=0;//first block of an RRQ. we've read opcode so now..
                     if (tftp_dec_filename_mode(buf, tftp) != 0) {
@@ -588,9 +694,9 @@ static int tftp_mainloop(tftp_t *tftp)
                         fprintf(stderr, "%s: encoding error\n", tftpstr);
                         return -1;
                     } else {
-                        errmsg("i'm reading the file. data packet prepped: opcode_data");
+                        // errmsg("i'm reading the file. data packet prepped: opcode_data");
                     }
-                    timerclear(&tftp->timer);
+                    // timerclear(&tftp->timer); //preserve timer across operation
                     retries = TFTP_DEF_RETRIES;
                     tftp->state = (len == TFTP_BLOCKSIZE) ? TFTP_STATE_DATA_SENT : TFTP_STATE_LAST_DATA_SENT;
                 }
@@ -609,8 +715,8 @@ static int tftp_mainloop(tftp_t *tftp)
                 fprintf(stdout, "unexpected message ignored - got opcode %s\n",  tftpopcodes[opcode-1]);
                 continue;
         }
-        fprintf(stdout, "%s (pid:%d): current block number:%d (prepared), current tftp protocol state=%s\n",
-                tftpstr, getpid(), tftp->blkno, tftpstates[(tftp->state)+1]);
+        // fprintf(stdout, "%s (pid:%d): current block number:%d (prepared), current tftp protocol state=%s\n",
+        //         tftpstr, getpid(), tftp->blkno, tftpstates[(tftp->state)+1]);
     }
 
     return returnstatus;

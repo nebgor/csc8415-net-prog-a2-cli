@@ -9,15 +9,16 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <fcntl.h>
- #include <dirent.h>
+#include <dirent.h>
+#include <utime.h>
 
 #include "fsm.c"
 //#include "defs.h"
 
 void udpnet_open_cli(tftp_t *);
 
-int cmd_tftp_rw(tftp_t tftp, int opcode, char* filename);
-long cmd_tfup_rts(tftp_t tftp, int opcode, char* filename);
+int cmd_tftp_rw(tftp_t *tftp, int opcode, char* filename);
+long cmd_tfup_rts(tftp_t *tftp, int opcode, char* filename);
 long filestats(char* filename, int echostats);
 
 int main(int argc, char *argv[]) {
@@ -51,14 +52,16 @@ int main(int argc, char *argv[]) {
     // } else if (strcmp(cmd, "rts") == 0) {
 	   //  opcode = TFUP_OPCODE_RTS;
     // }
-    
-    tftp.host = argv[1];
-    tftp.port = argv[2];
 
-    // create a UDP socket //
-    udpnet_open_cli(&tftp);
 
     while(1) {
+    
+	    tftp.host = argv[1];
+	    tftp.port = argv[2];
+
+	    // create a UDP socket //
+	    udpnet_open_cli(&tftp);
+
     	// brand new connection.
     	tftp.state = TFTP_STATE_OPENED; //this state shouldn't last long in a client (unless its waiting for user cli input!!)
 
@@ -123,30 +126,48 @@ int main(int argc, char *argv[]) {
 				    	if (long_time_no_see == 0) { //file not found
 				    		// do a get if file exists on remote. if that fails just abort operation and say not found anywhere.
 				    		printf("The file was not found in the local current directory. Attempting to check on server.\n");
-				    		// opcode = TFTP_OPCODE_RRQ;
 				    	}
 
 
-			    		printf("ok sending RTS reques \n");
+			    		// printf("ok sending RTS reques \n");
 			    		mod_time = (time_t)long_time_no_see;
 				  		printf ("%s \t\tm:%s", token, ctime(&mod_time));
 
 				  		strcpy(msgstr, token);
-				  		printf("filename:%s\n", msgstr);
-			    		remote_time_seen = cmd_tfup_rts(tftp, opcode, msgstr);
+				  		// printf("filename:%s\n", msgstr);
+			    		if(cmd_tfup_rts(&tftp, opcode, msgstr)) {
+			    			printf("error with RTS request. sync aborted. \n");
+			    		} else {
+
+				    		remote_time_seen = tftp.timestamp;
 
 
-				    	if (remote_time_seen > long_time_no_see) { // found newer in remote.
-				    		printf("remote file is newer. Doing RRQ\n");
-						    opcode = TFTP_OPCODE_RRQ; //get remote file.
-				    	} else if (remote_time_seen < long_time_no_see && long_time_no_see > 0) { //found newer locally. remote may not have or its older there.
-				    		printf("local file is newer. Doing WRQ\n");
-						    opcode = TFTP_OPCODE_WRQ; //send to remote the (local) file.
-				    	}
+					    	if (remote_time_seen > long_time_no_see) { // found newer in remote.
+					    		printf("remote file is newer. Doing RRQ\n");
+							    opcode = TFTP_OPCODE_RRQ; //get remote file.
+							    tftp.opcode = opcode;
+					    	} else if (remote_time_seen < long_time_no_see && long_time_no_see > 0) { //found newer locally. remote may not have or its older there.
+					    		printf("local file is newer. Doing WRQ\n");
+							    opcode = TFTP_OPCODE_WRQ; //send to remote the (local) file.
+							    tftp.opcode = opcode;
+					    	}
 
-					    cmd_tftp(&tftp, opcode, msgstr)	    		
+					    	if (opcode == TFTP_OPCODE_RRQ || long_time_no_see > 0) {
+							    cmd_tftp_rw(&tftp, opcode, msgstr);
 
-				    	printf("file updated. localts:%ld remotets:%ld\n", long_time_no_see, remote_time_seen);
+								//set file times to be in sync.
+							    struct utimbuf localtimes;
+							    localtimes.modtime = (opcode==TFTP_OPCODE_RRQ)?remote_time_seen:long_time_no_see;
+							    localtimes.actime = (int)NULL; //fileinfo.st_atime;
+							    utime(token,&localtimes);
+
+						    	printf("file updated. localts:%ld remotets:%ld\n", long_time_no_see, remote_time_seen);
+					    	} else {
+					    		printf("nothing to update or no such files seen anywhere. localts:%ld remotets:%ld\n", long_time_no_see, remote_time_seen);
+					    	}
+
+			    		}
+
 				    	//no more operations.
 				    	opcode = 0;
 
@@ -167,23 +188,23 @@ int main(int argc, char *argv[]) {
     }
 }
 
-long cmd_tfup_rts(tftp_t tftp, int opcode, char* filename) {
+long cmd_tfup_rts(tftp_t *tftp, int opcode, char* filename) {
 
 	int rc = 0;
 	int flags;
 	int state;
 
-    tftp.file = filename;
+    tftp->file = filename;
 
 	state = TFUP_STATE_RTS_SENT;
-	printf("prepping tfup packet for ts checking\n");
-	if (tfup_enc_rts_packet(&tftp, opcode) == -1) {
+	// printf("prepping tfup packet for ts checking\n");
+	if (tfup_enc_rts_packet(tftp, opcode) == -1) {
 	    printf("%s: encoding error\n", tftpstr);
 	    // tftp_close(&tftp);
 	    return -1;
 	}
-	tftp.state = state;
-	printf("rts packet ready.\n");
+	tftp->state = state;
+	// printf("rts packet ready.\n");
 
 	            // case TFUP_STATE_RTS_SENT: //TFUP state for RTS
              //    opcode = TFUP_OPCODE_TIME; 
@@ -194,40 +215,41 @@ long cmd_tfup_rts(tftp_t tftp, int opcode, char* filename) {
              //    return 1;
              //    break; //don't expect to send ACK
 
-	rc = tftp_mainloop(&tftp); //main part of FSM
+	rc = tftp_mainloop(tftp); //main part of FSM
 	// tftp_close(&tftp);
-	return tftp.timestamp;
+	return rc;
 }
 
-int cmd_tftp_rw(tftp_t tftp, int opcode, char* filename) {
+int cmd_tftp_rw(tftp_t *tftp, int opcode, char* filename) {
 
 	int rc = 0;
 	int flags;
 	int state;
 
-    tftp.file = filename;
+    tftp->file = filename;
     // if (argc == 6) {
     //     tftp.target = argv[5];
     // } else {
-    tftp.target = tftp.file; //smart people, simple life!
+    tftp->target = tftp->file; //smart people, simple life!
     // }
 
-	flags = (opcode == TFTP_OPCODE_RRQ) ? file_write(tftp.target, &tftp.fd) : file_read(tftp.file, &tftp.fd);
+	flags = (opcode == TFTP_OPCODE_RRQ) ? file_write(tftp->target, &(tftp->fd) ) : file_read(tftp->file, &(tftp->fd) );
 	state = (opcode == TFTP_OPCODE_RRQ) ? TFTP_STATE_RRQ_SENT : TFTP_STATE_WRQ_SENT;
 
-	if (tftp.fd == -1) {
-	    fprintf(stderr, "%s: failed to open '%s': %s\n",tftpstr, tftp.file, strerror(errno));
+	if (tftp->fd == -1) {
+	    fprintf(stderr, "%s: failed to open '%s': %s\n",tftpstr, tftp->file, strerror(errno));
 	    return -1;
 	}
 
-	if (tftp_enc_packet(&tftp, opcode, 0, NULL, 0) == -1) {
+	if (tftp_enc_packet(tftp, opcode, 0, NULL, 0) == -1) {
 	    fprintf(stderr, "%s: encoding error\n", tftpstr);
 	    return -1;
 	}
-	tftp.state = state;
-	tftp.blkno = (opcode == TFTP_OPCODE_RRQ) ? 1 : 0; //sent,expecting this blkno back
+	tftp->state = state;
+	tftp->blkno = (opcode == TFTP_OPCODE_RRQ) ? 1 : 0; //sent,expecting this blkno back
 
-	rc = tftp_mainloop(&tftp); //main part of FSM
+	rc = tftp_mainloop(tftp); //main part of FSM
+
 	// tftp_close(&tftp);
 	return rc;
 

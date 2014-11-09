@@ -28,12 +28,13 @@
 // 'rlist' - requests a list of file in the remote. client may implement an 'llist' locally.
 #define TFUP_OPCODE_RLS   8
 
-#define TFTP_DEF_RETRIES	3
-#define TFTP_DEF_TIMEOUT_SEC	1
-#define TFTP_DEF_TIMEOUT_USEC	5000
-#define TFTP_BLOCKSIZE		512
+#define TFTP_DEF_RETRIES	10
+#define TFTP_DEF_TIMEOUT_SEC	0
+// start at around double the round the earth rtt 133ms=250ms
+#define TFTP_DEF_TIMEOUT_USEC	250000
+#define TFTP_BLOCKSIZE		510
 //
-#define TFTP_MAX_MSGSIZE	(4 + TFTP_BLOCKSIZE)
+#define TFTP_MAX_MSGSIZE	(2 + TFTP_BLOCKSIZE)
 
 #define TFTP_MODE_OCTET		"octet"
 //Use mainly octet but rest are for extending
