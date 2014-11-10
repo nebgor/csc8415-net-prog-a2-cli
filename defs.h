@@ -64,6 +64,7 @@
 #define TFTP_STATE_WRQ_SEND_ACK	  8
 
 #define TFUP_STATE_RTS_SENT 9
+#define TFUP_STATE_RLS_SENT 10
 
 //the most useful struct
 typedef struct tftp {

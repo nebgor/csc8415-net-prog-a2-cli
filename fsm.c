@@ -6,6 +6,9 @@
 #include "defs.h"
 // #include "packet.h" // no lets use our own 'struct' and follow the betwork byte order better.
 
+#define FSM_DEBUG   0
+ #define FSM_DEBUG_EXTRA   0
+
 static char* tftpstr="tftpd";
 static char filename[128]; //so memory exists in differing scopes.
 static char *tftpstates[]={ "TFTP_STATE_OPENED",
@@ -49,46 +52,59 @@ jacobson's algo for Round Trip Timeout (RTO):
     simplistic variance.
     delta = measuredRTT - smoothedRTT;
     smoothedRTT = smoothedRTT + factor * delta;
-    varianceRTT = variance RTT + h( abs(delta) - varianceRTT );
-    RTO = smoothedRTT + 4 * varianceRTT;
+
+    varianceRTT = variance RTT + h * (abs(delta) - varianceRTT );
+    RTO = 1*smoothedRTT + 4 * varianceRTT;
 
 *******/
-    struct timeval tmptime={0};
+    int i=0;
 
-printf("srtt: %d:%d\t", srtt->tv_sec, srtt->tv_usec);
-printf("drtt: %d:%d\n", drtt->tv_sec, drtt->tv_usec);
+    rto->tv_sec = 0;
+    rto->tv_usec = 0;
+
+    drtt->tv_sec = 0;
+    drtt->tv_usec = 0;
+
+    if(FSM_DEBUG ) printf("mrtt: %d:%d\t", mrtt->tv_sec, mrtt->tv_usec);
+    if(FSM_DEBUG) printf("srtt: %d:%d\t", srtt->tv_sec, srtt->tv_usec);
     timersub(mrtt, srtt, drtt);
-    drtt->tv_sec *= 1.8; //factor
-    drtt->tv_usec *= 1.8;//factor
-printf("drtt: %d:%d\t", srtt->tv_sec, srtt->tv_usec);
+    if(FSM_DEBUG) printf("drtt: %d:%d\t", drtt->tv_sec, drtt->tv_usec);
+    drtt->tv_sec *= 0.125; //delta factor by phi=1/8
+    drtt->tv_usec *= 0.125;//delta factor by phi=1/8
     timeradd(srtt, drtt, srtt);
-printf("srtt: %d:%d\n", drtt->tv_sec, drtt->tv_usec);
+    if(FSM_DEBUG) printf("srtt: %d:%d\n", srtt->tv_sec, srtt->tv_usec);
+
+
 
     drtt->tv_sec = abs(drtt->tv_sec);
     drtt->tv_usec = abs(drtt->tv_usec);
-
-    timersub(drtt, vrtt, drtt); //this should be wrapped in some h() function. for now; unitary. hm, exponent?
+    if(FSM_DEBUG) printf("drtt: %d:%d\t", drtt->tv_sec, drtt->tv_usec);
+    if(FSM_DEBUG) printf("vrtt: %d:%d\t", vrtt->tv_sec, vrtt->tv_usec);
+    timersub(drtt, vrtt, drtt);
+    if(FSM_DEBUG) printf("'drtt': %d:%d\t", drtt->tv_sec, drtt->tv_usec);
+    drtt->tv_sec *= 0.25; //h of 1/4
+    drtt->tv_usec *=0.25; //h of 1/4
+    if(FSM_DEBUG) printf("'drtt': %d:%d\t", drtt->tv_sec, drtt->tv_usec);
     timeradd(drtt, vrtt, vrtt);
+    if(FSM_DEBUG) printf("vrtt: %d:%d\n", vrtt->tv_sec, vrtt->tv_usec);
 
-printf("drtt: %d:%d\t", drtt->tv_sec, drtt->tv_usec);
-printf("vrtt: %d:%d\n", vrtt->tv_sec, vrtt->tv_usec);
+ 
 
-    timeradd(vrtt, &tmptime, &tmptime);
-    timeradd(vrtt, &tmptime, &tmptime);
-    timeradd(vrtt, &tmptime, &tmptime);
-    timeradd(vrtt, &tmptime, &tmptime);
+    //multiply by 4. 2 doublings.
+    for(i=0; i<2; i++) timeradd(vrtt, rto, rto);
+    if(FSM_DEBUG) printf("vrtt: %d:%d\t", vrtt->tv_sec, vrtt->tv_usec);
 
-printf("srtt: %d:%d\t", srtt->tv_sec, srtt->tv_usec);
-printf("tmptime: %d:%d\n", tmptime.tv_sec, tmptime.tv_usec);
+    if(FSM_DEBUG) printf("srtt: %d:%d\n", srtt->tv_sec, srtt->tv_usec);
 
-    timeradd(&tmptime, srtt, rto);
 
-    printf("rto: %d:%d\n", rto->tv_sec, rto->tv_usec);
+    timeradd(rto, srtt, rto);//srtt factor of 1
+
+    if(FSM_DEBUG) printf("rto: %d:%d\n", rto->tv_sec, rto->tv_usec);
 
 }
 
 static void errmsg(char *msg) {
-    fprintf(stderr, "%s: %s\n", tftpstr, msg);
+    if(FSM_DEBUG_EXTRA) fprintf(stderr, "%s: %s\n", tftpstr, msg);
 }
 
 static void tftp_close(tftp_t *tftp) { //close all pipes
@@ -139,29 +155,54 @@ static void check_sig_handler(tftp_t *tftp) {
 
 // request for timestamp [just opcode and filename]
 static int tfup_enc_rts_packet(tftp_t *tftp, const int opcode) {
-    printf("encoding RTS, opcode:%d\n", opcode);
+   if(FSM_DEBUG) printf("encoding RTS, opcode:%d\n", opcode);
 
     unsigned char *p = tftp->msg; //our raw buffer
     int len;
     // showbits(*p);
     // *p = opcode; //basically replicating this below in bitwise operationss.
     *p = (opcode & 0xff); //lower order byte is going in FIRST for the 2014 assignment 2 given model server..
-        showbits(*p);
+        // showbits(*p);
     p++;  
     *p = ((opcode >> 8) & 0xff); // so NOT big-endian (network byte order also) but its what the model server expects. 'standards'
         // showbits(*p);
     p++;
     // showbits(tftp->msg);
     //send tftp->file
-    len = strlen(tftp->file) + 2 ; //len
-    if (len > TFTP_MAX_MSGSIZE) {
+    len = strlen(tftp->file)+1; //copy the null.
+    printf("len(with null):%d\n", len);
+
+    if (len+2 > TFTP_MAX_MSGSIZE) {
         errmsg("encoding error: filename too long");
         return -1;
     }
 
-    //len = strlen(tftp->file);
-    memcpy(p, tftp->file, len + 1);
-    p += len + 1;
+    memcpy(p, tftp->file, len);
+    // p += len + 1;
+
+    tftp->msglen=len+2;
+    printf("msglen:%d\n", tftp->msglen);
+    tftp->opcode=opcode; //for detecting if tfup operation
+    return tftp->msglen;
+}
+
+// request for timestamp [just opcode and filename]
+static int tfup_enc_rls_packet(tftp_t *tftp, const int opcode) {
+   if(FSM_DEBUG) printf("encoding RLS, opcode:%d\n", opcode);
+
+    unsigned char *p = tftp->msg; //our raw buffer
+    int len;
+    // showbits(*p);
+    // *p = opcode; //basically replicating this below in bitwise operationss.
+    *p = (opcode & 0xff); //lower order byte is going in FIRST for the 2014 assignment 2 given model server..
+     if(FSM_DEBUG) showbits(*p);
+    p++;  
+    *p = ((opcode >> 8) & 0xff); // so NOT big-endian (network byte order also) but its what the model server expects. 'standards'
+        // showbits(*p);
+    p++;
+    // showbits(tftp->msg);
+    //send tftp->file
+    len = 2 ; //len
 
     tftp->msglen=len;
     tftp->opcode=opcode; //for detecting if tfup operation
@@ -174,7 +215,7 @@ static int tfup_dec_opcode(unsigned char *buf, int buflen, int *opcode) {
     }
 
     *opcode = (buf[1] << 8) + buf[0];
-    fprintf(stdout,"decoded tfup opcode %d\n",  *opcode);
+    if(FSM_DEBUG) printf("decoded tfup opcode %d\n",  *opcode);
     return 0;
 }
 
@@ -187,7 +228,7 @@ static int tfup_dec_timestamp(unsigned char *buf, int buflen, tftp_t *tftp) {
 
     // tftp->timestamp = ntohl(tftp->timestamp);
     // *timestamp = (buf[0] << 8) + buf[0];
-    fprintf(stdout,"decoded tfup timestamp %ld\n",  tftp->timestamp);
+    if(FSM_DEBUG) printf("decoded tfup timestamp %ld\n",  tftp->timestamp);
     return 0;
 }
 
@@ -231,7 +272,7 @@ static int tftp_enc_packet(tftp_t *tftp, const int opcode, int blkno, unsigned c
     	    errmsg("encoding error: data too big");
     	    return -1;
     	} else {
-            printf("loaded %d bytes onto data packet.\n", datalen);
+           if(FSM_DEBUG) printf("loaded %d bytes onto data packet.\n", datalen);
         }
     	memcpy(p, data, datalen);
     	p += datalen;
@@ -272,7 +313,7 @@ static int tftp_dec_opcode(unsigned char *buf, int buflen, int *opcode) {
 
     // so NOT big-endian (network byte order also) but its what the model server expects. 'standards'
     *opcode = (buf[1] << 8) + buf[0]; //opcode is not like in standard tftp protocol now. opcode it little endian.
-    fprintf(stdout,"decoded tftp opcode %d\n",  *opcode);
+    if(FSM_DEBUG) fprintf(stdout,"decoded tftp opcode %d\n",  *opcode);
     return 0;
 }
 
@@ -286,7 +327,7 @@ static int tftp_dec_filename_mode(unsigned char *buf, tftp_t* tftp) {
     strcpy(tftp->file,(char *)&buf[2]);
 
 //    memcpy(tftp->file, (char *)&buf[2], sizeof((char *)&buf[2]));
-    fprintf(stdout,"decoded filename %s\n",  tftp->file);
+    if(FSM_DEBUG) fprintf(stdout,"decoded filename %s\n",  tftp->file);
 
     char* mode = (char *)&buf[2+sizeof(tftp->file)+4]; //opcode,str,0,mode,o
 
@@ -312,16 +353,31 @@ static int tftp_dec_blkno(unsigned char *buf, int buflen, int *blkno) {
     return 0;
 }
 
+
+static int tfup_dec_rls_data(unsigned char *buf, int buflen, unsigned char **data, int *datalen) {
+    if (buflen < 3) {
+        *data = NULL;
+        *datalen = 0;
+        return 0;
+    }
+
+    *data = buf+2; // no blkno this time in tfup...
+    *datalen = buflen-2; //no blkno, just opcode to offset.
+    *(data+buflen-2) = '\0';
+    if(FSM_DEBUG) fprintf(stdout,"decoded datalen %d\n",  *datalen);
+    return 0;
+}
+
 static int tftp_dec_data(unsigned char *buf, int buflen, unsigned char **data, int *datalen) {
-    if (buflen < 5) {
-	*data = NULL;
-	*datalen = 0;
-	return 0xffff;
+    if (buflen < 3) {
+    	*data = NULL;
+    	*datalen = 0;
+    	return 0;
     }
 
     *data = buf+2; // no blkno this time in tfup...
     *datalen = buflen - 2; //no blkno, just opcode to offset.
-    fprintf(stdout,"decoded datalen %d\n",  *datalen);
+    if(FSM_DEBUG) fprintf(stdout,"decoded datalen %d\n",  *datalen);
     return 0;
 }
 
@@ -368,12 +424,13 @@ static int tftp_mainloop(tftp_t *tftp)
     char *servererrmsg;
     fd_set fdset;
     int retries, returnstatus = 1;
-    struct timeval rto={0}, timeout={0}, transmissiontime={0}, originaltrans={0}, mrtt={0}, srtt={0}, drtt={0}, vrtt={0}, tmprtt={0}; //rto=timeout
+    struct timeval rto={0}, timeout={0}, now={0}, transmissiontime={0}, originaltrans={0}, mrtt={0}, srtt={0}, drtt={0}, vrtt={0}; //rto=timeout
 
     retries = TFTP_DEF_RETRIES;
     timerclear(&tftp->timer);
+    timerclear(&tftp->backoff);
     while (tftp->state != TFTP_STATE_CLOSED) {
-        fprintf(stdout, "%s (pid:%d): current tftp protocol state=%s\n", tftpstr, getpid(), tftpstates[(tftp->state)+1]);
+        if(FSM_DEBUG) fprintf(stdout, "%s (pid:%d): current tftp protocol state=%s\n", tftpstr, getpid(), tftpstates[(tftp->state)+1]);
 
         check_sig_handler(tftp);
 
@@ -420,43 +477,51 @@ static int tftp_mainloop(tftp_t *tftp)
             FD_ZERO(&fdset);
             FD_SET(tftp->sd, &fdset);
 
-            // @todo use jacobson's algos to get srtt (and rtt). for now , simplistic doubling. also use karn's : ignore retransmission acks.
-            if (! timerisset(&tftp->timer)) { //first timer setup. 
-                tftp->backoff.tv_sec = TFTP_DEF_TIMEOUT_SEC;
-                tftp->backoff.tv_usec = TFTP_DEF_TIMEOUT_USEC;
-                timeradd(&rto, &tftp->backoff, &timeout);                
-                rto.tv_sec=TFTP_DEF_TIMEOUT_SEC;
-                rto.tv_usec=TFTP_DEF_TIMEOUT_USEC;
+            if ( !timerisset(&tftp->timer) || tftp->backoff.tv_usec == 0) { //first timer setup when there isn't or no backoff(had a success)
 
+                if ( tftp->backoff.tv_usec == 0) { //do this for every new round of packet attempts...
+                    tftp->backoff.tv_sec = TFTP_DEF_TIMEOUT_SEC;
+                    tftp->backoff.tv_usec = TFTP_DEF_TIMEOUT_USEC;
+                } else {
+                    if(FSM_DEBUG) printf("initial timer is setup.\n");
+                    rto.tv_sec=TFTP_DEF_TIMEOUT_SEC;
+                    rto.tv_usec=TFTP_DEF_TIMEOUT_USEC;
+                }
+                timerclear(&timeout);
+                timeradd(&rto, &timeout, &timeout);
+
+                if(FSM_DEBUG) printf("using timeout duration: %d:%d\n", timeout.tv_sec, timeout.tv_usec);
                 timeradd(&transmissiontime, &timeout, &tftp->timer);
 
-                //save first packet transmission try time.
+                //save first packet transmission TRY time.
                 originaltrans.tv_sec = transmissiontime.tv_sec;
                 originaltrans.tv_usec = transmissiontime.tv_usec;
 
 
-                printf("initial timer is setup. backoff: %d:%d\n", timeout.tv_sec, timeout.tv_usec);
             } else if (timercmp(&transmissiontime, &tftp->timer, > )) {
                 /* We just retransmitted. Double the backoff interval. */
                 timeradd(&tftp->backoff, &tftp->backoff, &tftp->backoff); //dbl backoff
-                timeradd(&rto, &tftp->backoff, &timeout); //add backoff and RTO.
-                // timeradd(&tftp->backoff, &timeout, &timeout);
-                // timeradd(&transmissiontime, &tmprtt, &tftp->timer); //absolute time for select()
-                printf("retransmitting, timeradded with double backoff : %d:%d\n", timeout.tv_sec, timeout.tv_usec);
-            } else {
-                /* We did not wait long enough as select came back to us with timeout on fd action... 
-                Calculate the remaining time to block. */
 
-                printf("timeout from after select   (timeout) timeout+backoff used : %d:%d\n", timeout.tv_sec, timeout.tv_usec);
-                printf("timeout from after select   (timeout) backoff used : %d:%d\n", tftp->backoff.tv_sec, tftp->backoff.tv_usec);
-                printf("timeout from after select   (timeout) RTO used : %d:%d\n", rto.tv_sec, rto.tv_usec);
-                timersub(&tftp->timer, &transmissiontime, &tmprtt); //timeout is/maybe adjusted by select when it returns upon success.
-                printf("time since (re)transmission: %d:%d\n", tmprtt.tv_sec, tmprtt.tv_usec);
+                timeradd(&rto, &tftp->backoff, &timeout); //add backoff and RTO.
+
+               if(FSM_DEBUG) printf("(re)transmitting, timeradded with double backoff : %d:%d\n", timeout.tv_sec, timeout.tv_usec);
+
+            } else {
+                /*select got back with 'I/O ready' but no data (not important data?)...
+                 transmissiontime (now) is not great than timer.. so not retransmitted yet.
+                Calculate the remaining time to block. to continue waiting for the remaining time.*/
+
+               if(FSM_DEBUG) printf("timeout from select() (TIMEOUT) (LINUX:amount of time not slept - indicative only) : %d:%d\n", timeout.tv_sec, timeout.tv_usec);
+               if(FSM_DEBUG) printf("timeout from select() (TIMEOUT) backoff in use : %d:%d\n", tftp->backoff.tv_sec, tftp->backoff.tv_usec);
+               if(FSM_DEBUG) printf("timeout from select() (TIMEOUT) RTO in use : %d:%d\n", rto.tv_sec, rto.tv_usec);
+                timersub(&tftp->timer, &transmissiontime, &timeout); //timeout is/maybe adjusted by select when it returns upon success.
+               if(FSM_DEBUG) printf("timeout left since last transmission. will waiting again for: %d:%d\n", timeout.tv_sec, timeout.tv_usec);
             }
 
 
 
             //the wait control.
+            if(FSM_DEBUG||1) printf("timeout: %d:%d\t", timeout.tv_sec, timeout.tv_usec);
             if (select((tftp->sd)+1, &fdset, NULL, NULL, &timeout) == -1) {
                 fprintf(stderr, "%s: select: %s\n",
                         tftpstr, strerror(errno));
@@ -479,26 +544,25 @@ static int tftp_mainloop(tftp_t *tftp)
                 // try again!! (retransmit)
                 continue;
             } else {
+                //measure rtt from (karn's algo) first transmission of the unique packet.
+
+               if(FSM_DEBUG) printf("timeout from after select  (successful) (LINUX:amount of time not slept - indicative only) : %d:%d\n", timeout.tv_sec, timeout.tv_usec);
+               if(FSM_DEBUG) printf("timeout from after select  (successful) backoff used : %d:%d\n", tftp->backoff.tv_sec, tftp->backoff.tv_usec);
+               if(FSM_DEBUG) printf("timeout from after select  (successful) RTO used : %d:%d\n", rto.tv_sec, rto.tv_usec);
+               if(FSM_DEBUG) printf("time of original transmission : %d:%d\n", originaltrans.tv_sec, originaltrans.tv_usec);
+               if(FSM_DEBUG) printf("time of recent transmission     : %d:%d\n", transmissiontime.tv_sec, transmissiontime.tv_usec);
+               gettimeofday(&now, NULL);
+               timersub(&now, &originaltrans, &mrtt);
+               if(FSM_DEBUG||1) printf("time since original transmission (mrtt) : %d:%d\n", mrtt.tv_sec, mrtt.tv_usec);
+
                 //success, reset backoff
-                tftp->backoff.tv_sec = TFTP_DEF_TIMEOUT_SEC;
-                tftp->backoff.tv_usec = TFTP_DEF_TIMEOUT_USEC;
+                tftp->backoff.tv_sec = 0;
+                tftp->backoff.tv_usec = 0;
+                
+                // Jacobson's internet saving algorithm
+                jacobson_rto(&mrtt, &srtt, &drtt, &vrtt, &rto);
 
-                //measure rtt...
-                printf("timeout from after select  (successful) timeout+backoff used : %d:%d\n", timeout.tv_sec, timeout.tv_usec);
-                printf("timeout from after select  (successful) backoff used : %d:%d\n", tftp->backoff.tv_sec, tftp->backoff.tv_usec);
-                printf("timeout from after select  (successful) RTO used : %d:%d\n", rto.tv_sec, rto.tv_usec);
-                timersub(&tftp->timer, &originaltrans, &mrtt); //timeout is/maybe adjusted by select when it returns upon success.
-                printf("time original transmission : %d:%d\n", originaltrans.tv_sec, originaltrans.tv_usec);
-                printf("time this transmission     : %d:%d\n", transmissiontime.tv_sec, transmissiontime.tv_usec);
-                printf("time since original transmission (mrtt) : %d:%d\n", mrtt.tv_sec, mrtt.tv_usec);
-
-
-
-                if ( !timercmp(&originaltrans, &transmissiontime, < ) ) { //karn - ie: was a backoff used -> retransmission? then we don't know so don't calculate.
-                    // Jacobson's internet saving algorithm
-                    jacobson_rto(&mrtt, &srtt, &drtt, &vrtt, &rto);
-                }
-                printf("RTO: %d:%d\n", rto.tv_sec, rto.tv_usec);
+               if(FSM_DEBUG) printf("RTO: %d:%d\n", rto.tv_sec, rto.tv_usec);
 
             }
 
@@ -512,11 +576,15 @@ static int tftp_mainloop(tftp_t *tftp)
                 // tftp_close(tftp);
                 return -1;
             }
-//            fprintf(stdout, "%s: recvfrom: %s\n", tftpstr, tftp->addr);
+            if(FSM_DEBUG) fprintf(stdout, "%s: recvfrom: %s\n", tftpstr, tftp->addr);
             if(tftp->opcode > 5) {
-                if (tfup_dec_opcode(buf, buflen, &opcode) != 0) {
-                    errmsg("failed to parse tfup opcode in message");
-                    continue;
+                if(tftp->opcode < TFUP_OPCODE_RLS) { //RTS-response
+                    if (tfup_dec_opcode(buf, buflen, &opcode) != 0) {
+                        errmsg("failed to parse tfup opcode in message");
+                        continue;
+                    }
+                } else {
+                    //nothing.
                 }
             } else {
                 if (tftp_dec_opcode(buf, buflen, &opcode) != 0) {
@@ -559,22 +627,25 @@ static int tftp_mainloop(tftp_t *tftp)
         switch (tftp->state) { //control our opcode based on state.
             case TFUP_STATE_RTS_SENT:
                 opcode = TFUP_OPCODE_TIME;
-                fprintf(stdout, "%s (pid:%d): ending opcode=%s\n", tftpstr, getpid(), tftpopcodes[opcode-1]);
+                if(FSM_DEBUG) fprintf(stdout, "%s (pid:%d): ending opcode=%s\n", tftpstr, getpid(), tftpopcodes[opcode-1]);
                 break;
-
+            case TFUP_STATE_RLS_SENT:
+                opcode = TFUP_OPCODE_RLS;
+                if(FSM_DEBUG) fprintf(stdout, "%s (pid:%d): ending opcode=%s\n", tftpstr, getpid(), tftpopcodes[opcode-1]);
+                break;
             case TFTP_STATE_RRQ_SENT: //a client will write and ACK
             case TFTP_STATE_WRQ_SEND_ACK: //a server will write and ACK
             case TFTP_STATE_ACK_SENT: //con't to keep sending ACK
                 opcode = TFTP_OPCODE_ACK;
                 tftp->opcode=opcode;
-                fprintf(stdout, "%s (pid:%d): performing opcode=%s\n", tftpstr, getpid(), tftpopcodes[opcode-1]);
+                if(FSM_DEBUG) fprintf(stdout, "%s (pid:%d): performing opcode=%s\n", tftpstr, getpid(), tftpopcodes[opcode-1]);
                 break; //expect to send ACK
             case TFTP_STATE_WRQ_SENT: //a client will read and send DATA
             case TFTP_STATE_RRQ_SEND_ACK: ////a server will read and send DATA
             case TFTP_STATE_DATA_SENT: //con't to keep sending DATA
             case TFTP_STATE_LAST_DATA_SENT:
                 opcode = TFTP_OPCODE_DATA;
-                fprintf(stdout, "%s (pid:%d): performing opcode=%s\n", tftpstr, getpid(), tftpopcodes[opcode-1]);
+                if(FSM_DEBUG) fprintf(stdout, "%s (pid:%d): performing opcode=%s\n", tftpstr, getpid(), tftpopcodes[opcode-1]);
                 break; //expect to send ACK
             default:
                 opcode = TFTP_OPCODE_ERROR; break; //unknown state.. very bad.
@@ -582,6 +653,19 @@ static int tftp_mainloop(tftp_t *tftp)
         switch (opcode) {
             case TFUP_OPCODE_TIME:
                 return tfup_dec_timestamp(buf, buflen, tftp);
+                break;
+            case TFUP_OPCODE_RLS:
+                printf("reading rlist file\n");
+                unsigned char *dat;
+                int datal;
+                
+                if (tfup_dec_rls_data(buf, buflen, &dat, &datal) != 0) {
+                        errmsg("failed to decode data/datalen");
+                        return -1;
+                }
+                fwrite(dat, sizeof(char), buflen-2, stdout);
+                // printf("\n\n%s\n\n", dat);
+                return 0;
                 break;
             case TFTP_OPCODE_ACK: //the client or server will do this
                 errmsg("starting ACK out\n");
@@ -615,7 +699,7 @@ static int tftp_mainloop(tftp_t *tftp)
                         if (tftp_dec_data(buf, buflen, &data, &datalen) != 0) {
                             errmsg("failed to decode data/datalen");
                         } else {
-                            fprintf(stderr, "%s: got data to write (size:%d)\n", tftpstr, datalen);
+                            if(FSM_DEBUG) fprintf(stderr, "%s: got data to write (size:%d)\n", tftpstr, datalen);
                         }
                         len = write(tftp->fd, data, datalen);
                         if (len == -1) {
@@ -632,7 +716,7 @@ static int tftp_mainloop(tftp_t *tftp)
                         }
                         tftp->target=tftp->file;
                         file_write(tftp->file, &tftp->fd);
-                        fprintf(stderr, "%s: write : %s\n",tftpstr, strerror(errno));
+                        if(FSM_DEBUG) fprintf(stderr, "%s: write : %s\n",tftpstr, strerror(errno));
                     }
 
                     if (tftp_enc_packet(tftp, TFTP_OPCODE_ACK, tftp->blkno, NULL, 0) == -1) { //can use blkno as tranmission count also.
@@ -642,7 +726,7 @@ static int tftp_mainloop(tftp_t *tftp)
                         // errmsg("i'm writing the file. ack packet prepped: opcode_ack");
                     }
                     tftp->blkno++;
-                    // timerclear(&tftp->timer); //preserve timer across operation
+                    timerclear(&tftp->timer); //preserve timer across operation
                     retries = TFTP_DEF_RETRIES;
                     if (blkno > 0) {
                         tftp->state = (datalen == TFTP_BLOCKSIZE ) ?
@@ -696,7 +780,7 @@ static int tftp_mainloop(tftp_t *tftp)
                     } else {
                         // errmsg("i'm reading the file. data packet prepped: opcode_data");
                     }
-                    // timerclear(&tftp->timer); //preserve timer across operation
+                    timerclear(&tftp->timer); //preserve timer across operation
                     retries = TFTP_DEF_RETRIES;
                     tftp->state = (len == TFTP_BLOCKSIZE) ? TFTP_STATE_DATA_SENT : TFTP_STATE_LAST_DATA_SENT;
                 }
@@ -715,8 +799,8 @@ static int tftp_mainloop(tftp_t *tftp)
                 fprintf(stdout, "unexpected message ignored - got opcode %s\n",  tftpopcodes[opcode-1]);
                 continue;
         }
-        // fprintf(stdout, "%s (pid:%d): current block number:%d (prepared), current tftp protocol state=%s\n",
-        //         tftpstr, getpid(), tftp->blkno, tftpstates[(tftp->state)+1]);
+        if(FSM_DEBUG) fprintf(stdout, "%s (pid:%d): current block number:%d (prepared), current tftp protocol state=%s\n",
+        tftpstr, getpid(), tftp->blkno, tftpstates[(tftp->state)+1]);
     }
 
     return returnstatus;

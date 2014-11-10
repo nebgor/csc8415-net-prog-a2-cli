@@ -4,20 +4,13 @@ OBJ =(*.o.c)
 
 CC = gcc -g -O0
 
-all: tftp_cli tftp_ser
+all: fsynccli
 
-tftp_ser: tftp_ser.o files.o udpnet.o fsm.o
-	$(CC) -o tftp_ser tftp_ser.o files.o udpnet.o fsm.o
+fsynccli: fsynccli.o  files.o udpnet.o fsm.o
+	$(CC) -o fsynccli fsynccli.o files.o udpnet.o fsm.o
 
-tftp_cli: tftp_cli.o  files.o udpnet.o fsm.o
-	$(CC) -o tftp_cli tftp_cli.o files.o udpnet.o fsm.o
-
-#
-tftp_ser.o: tftp_ser.c fsm.o defs.h
-	$(CC) -c tftp_ser.c
-
-tftp_cli.o: tftp_cli.c fsm.o defs.h
-	$(CC) -c tftp_cli.c
+fsynccli.o: fsynccli.c fsm.o defs.h
+	$(CC) -c fsynccli.c
 
 #
 files.o: files.c
@@ -30,7 +23,7 @@ fsm.o: fsm.c
 	$(CC) -c fsm.c
 
 clean:
-	rm -f *.o *~ tftp_ser tftp_cli 
+	rm -f *.o *~ fsynccli 
 
 zip: clean
 	pth=`pwd` ; \

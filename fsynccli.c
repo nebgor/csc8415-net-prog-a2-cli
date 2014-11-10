@@ -37,7 +37,7 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    char cmdstr[TFTP_MAX_MSGSIZE], msgstr[TFTP_BLOCKSIZE]={0};
+    char cmdstr[TFTP_MAX_MSGSIZE], msgstr[TFTP_MAX_MSGSIZE]={0};
     char *token;
     DIR *dir;
     struct dirent *ent;
@@ -79,7 +79,7 @@ int main(int argc, char *argv[]) {
 			token = strtok(token, delim);
 
 			while (token != NULL) {
-				printf("token:%s\n", token);
+				// printf("token:%s\n", token);
 			    if (strcmp(token, "h") == 0) {
 			    	printf("\nh\t\t- for this help.\n");
 			    	printf("\nllist\t\t - lists file in local current directory.\n");
@@ -145,7 +145,7 @@ int main(int argc, char *argv[]) {
 
 						msgstr[toklen] = '\0';
 
-				  		printf("filename:%s\n", msgstr);
+				  		// printf("filename:%s\n", msgstr);
 			    		if(cmd_tfup_rts(&tftp, opcode, msgstr)) {
 			    			printf("error with RTS request. sync aborted. \n");
 			    		} else {

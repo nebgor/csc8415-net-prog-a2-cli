@@ -21,7 +21,7 @@ void file_read(char* file, int *fd) {
 void file_write(char* file, int *fd) {
      /* open up a handle to our target file to receive the contents */
      /* from the server */
-     *fd = open(file, O_RDWR | O_CREAT, 0666);
+      *fd = open(file, O_RDWR | O_CREAT, 0666);
 
      if (*fd == -1) {
          fprintf(stderr, "Could not open target file [%s], using stdout. (%s)\n", file, strerror(errno));
